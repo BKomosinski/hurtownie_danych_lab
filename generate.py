@@ -3,120 +3,207 @@ import math
 import random
 import argparse
 
+# --- STAŁE I KONFIGURACJA ---
+FIELD_MIN_LAT = 52.4600
+FIELD_MAX_LAT = 52.4650
+FIELD_MIN_LON = 16.9200
+FIELD_MAX_LON = 16.9300
 
-def ping_pong_movement(t_sec, velocity, max_distance) :
-	"""
-	Funkcja fali trójkątnej. Sprawia, że obiekt odbija się od wirtualnej ściany.
-	Kiedy osiągnie 'max_distance', zawraca ze stałą prędkością 'velocity'.
-	"""
-	if velocity == 0 :
-		return 0
-	inside_sin = (velocity * t_sec * math.pi) / (2.0 * max_distance)
-	return max_distance * (2.0 / math.pi) * math.asin(math.sin(inside_sin))
+METERS_TO_LAT = 1 / 111320.0
+METERS_TO_LON = 1 / (111320.0 * math.cos(math.radians((FIELD_MIN_LAT + FIELD_MAX_LAT) / 2)))
 
 
-def generate_bounded_gnss(
+def clamp(val, min_val, max_val) :
+	return max(min(val, max_val), min_val)
+
+
+def generate_sensors(num_sensors) :
+	sensors = []
+	for i in range(num_sensors) :
+		lat = random.uniform(FIELD_MIN_LAT, FIELD_MAX_LAT)
+		lon = random.uniform(FIELD_MIN_LON, FIELD_MAX_LON)
+		sensors.append({'id' : f"sensor_{i}", 'lat' : lat, 'lon' : lon})
+	return sensors
+
+
+def is_near_sensor(rover_lat, rover_lon, sensors, threshold_meters=15.0) :
+	min_dist = float('inf')
+	closest_sensor = None
+
+	for s in sensors :
+		d_lat = (rover_lat - s['lat']) / METERS_TO_LAT
+		d_lon = (rover_lon - s['lon']) / METERS_TO_LON
+		dist = math.sqrt(d_lat ** 2 + d_lon ** 2)
+		if dist < min_dist :
+			min_dist = dist
+			closest_sensor = s['id']
+
+	if min_dist <= threshold_meters :
+		return True, closest_sensor
+	return False, None
+
+
+def generate_fleet_data(
 		filename="simulated_rovers_piotrowo.csv",
-		start_time_ns=1765375369784983905,
-		duration_sec=494,
+		num_rovers=5,
+		start_time_unix=1714398000.523,
+		duration_sec=3600,
 		frequency_hz=10,
-		lat0=52.40152,
-		lon0=16.95164,
-		alt0=100.161
+		num_sensors=3
 ) :
-	"""
-	Generuje sztuczne dane GNSS dostosowane do statystyk profilowania z kampusu Piotrowo.
-	"""
 	steps = duration_sec * frequency_hz
-	dt_ns = int(1_000_000_000 / frequency_hz)
 	dt_sec = 1.0 / frequency_hz
 
-	# Przeliczniki stopni na metry
-	meters_to_lat = 1 / 111320.0
-	meters_to_lon = 1 / (111320.0 * math.cos(math.radians(lat0)))
+	sensors = generate_sensors(num_sensors)
+	print("--- Zdefiniowane Czujniki ---")
+	for s in sensors :
+		print(f"[{s['id']}]: Lat: {s['lat']:.6f}, Lon: {s['lon']:.6f}")
 
-	# Wymiary wirtualnego ogrodzenia (połowa szerokości/długości kampusu w metrach)
-	BOUNDARY_X = 40.0
-	BOUNDARY_Y = 38.0
+	rovers = []
+	# Nowe tryby poruszania się
+	profiles = ['straight', 'sine', 'zigzag', 'meander']
+
+	for i in range(num_rovers) :
+		target_sensor = random.choice(sensors)
+		profile = random.choice(profiles)
+
+		rovers.append({
+			'id' : i + 1,
+			'lat' : random.uniform(FIELD_MIN_LAT, FIELD_MAX_LAT),
+			'lon' : random.uniform(FIELD_MIN_LON, FIELD_MAX_LON),
+			'target_sensor' : target_sensor,
+			'state' : 'moving_to_sensor',
+			'time_at_sensor' : 0,
+			'speed' : random.uniform(1.0, 2.5),
+			'target_time_at_sensor' : (duration_sec / 2) + random.uniform(-300, 300),
+			'profile' : profile,
+			# Parametry do nowych wzorców ruchu
+			'roam_angle' : random.uniform(0, 2 * math.pi),  # Główny kierunek jazdy
+			'omega' : random.uniform(0.5, 1.5),  # Częstotliwość fali/zygzaka
+			'amplitude' : random.uniform(2.0, 6.0),  # Szerokość wężykowania
+			'period' : random.uniform(2.0, 5.0),  # Co ile sekund zygzak zmienia kierunek
+			'roam_start_t' : 0
+		})
+
+	proximity_hits = {s['id'] : 0 for s in sensors}
+
+	print(f"\nGenerowanie danych dla {num_rovers} robotów (Profile: {', '.join(profiles)})...")
 
 	with open(filename, mode='w', newline='') as f :
 		writer = csv.writer(f)
-		writer.writerow(['log_time_ns', 'frame_id', 'latitude', 'longitude', 'altitude', 'status'])
+		writer.writerow(['Id', 'timestamp', 'latitude', 'longitude'])
 
 		for step in range(steps) :
-			current_time = start_time_ns + (step * dt_ns)
-			t_sec = step * dt_sec
-			noise_alt = random.gauss(0, 0.15)  # Szum wysokości z raportu
+			current_time = start_time_unix + (step * dt_sec)
+			t_total = step * dt_sec
 
-			# --- 1. ROBOT: RUCH PO OKRĘGU ---
-			r_circle = 15.0
-			omega = 0.1
-			dx1 = r_circle * math.cos(omega * t_sec)
-			dy1 = r_circle * math.sin(omega * t_sec)
+			for rover in rovers :
+				ts = rover['target_sensor']
 
-			writer.writerow([
-				current_time, 'ublox_rover_circle',
-				round(lat0 + (dy1 * meters_to_lat), 8),
-				round(lon0 + (dx1 * meters_to_lon), 8),
-				round(alt0 + noise_alt, 3), 2
-			])
+				if rover['state'] == 'moving_to_sensor' :
+					dx_m = (ts['lon'] - rover['lon']) / METERS_TO_LON
+					dy_m = (ts['lat'] - rover['lat']) / METERS_TO_LAT
+					dist = math.sqrt(dx_m ** 2 + dy_m ** 2)
 
-			# --- 2. ROBOT: RUCH W LINII PROSTEJ (Z ODBICIEM) ---
-			v_line = 0.5
-			dx2 = ping_pong_movement(t_sec, velocity=v_line, max_distance=BOUNDARY_X)
-			dy2 = -20.0
+					if dist < 5.0 :
+						rover['state'] = 'working_at_sensor'
+					else :
+						move_dist = rover['speed'] * dt_sec
+						ratio = move_dist / dist if dist != 0 else 0
+						rover['lon'] += (dx_m * ratio) * METERS_TO_LON
+						rover['lat'] += (dy_m * ratio) * METERS_TO_LAT
 
-			writer.writerow([
-				current_time, 'ublox_rover_line',
-				round(lat0 + (dy2 * meters_to_lat), 8),
-				round(lon0 + (dx2 * meters_to_lon), 8),
-				round(alt0 + noise_alt, 3), 2
-			])
+				elif rover['state'] == 'working_at_sensor' :
+					angle = random.uniform(0, 2 * math.pi)
+					rover['lon'] += (math.cos(angle) * 0.5 * dt_sec) * METERS_TO_LON
+					rover['lat'] += (math.sin(angle) * 0.5 * dt_sec) * METERS_TO_LAT
 
-			# --- 3. ROBOT: RUCH SINUSOIDALNY (Z ODBICIEM) ---
-			v_north = 0.3
-			dy3 = ping_pong_movement(t_sec, velocity=v_north, max_distance=BOUNDARY_Y)
-			dx3 = 5.0 * math.sin(2 * math.pi * 0.05 * t_sec)
+					rover['time_at_sensor'] += dt_sec
+					if rover['time_at_sensor'] >= rover['target_time_at_sensor'] :
+						rover['state'] = 'roaming'
+						rover['roam_start_t'] = t_total
 
-			writer.writerow([
-				current_time, 'ublox_rover_wave',
-				round(lat0 + (dy3 * meters_to_lat), 8),
-				round(lon0 + (dx3 * meters_to_lon), 8),
-				round(alt0 + noise_alt, 3), 2
-			])
+				elif rover['state'] == 'roaming' :
+					t_roam = t_total - rover['roam_start_t']
 
-	print(f"Wygenerowano '{filename}' pomyślnie.")
-	print(f"Czas: {duration_sec}s, Częstotliwość: {frequency_hz}Hz.")
-	print(f"Zabezpieczono granice Kampusu (X: ±{BOUNDARY_X}m, Y: ±{BOUNDARY_Y}m).")
+					d_lat_m = 0.0
+					d_lon_m = 0.0
+
+					forward_m = rover['speed'] * dt_sec
+					angle = rover['roam_angle']
+
+					if rover['profile'] == 'straight' :
+						# Zwykła jazda po prostej
+						d_lat_m = forward_m * math.sin(angle)
+						d_lon_m = forward_m * math.cos(angle)
+
+					elif rover['profile'] == 'sine' :
+						# Liniowo do przodu + sinusoidalnie na boki
+						lateral_m = rover['amplitude'] * rover['omega'] * math.cos(rover['omega'] * t_roam) * dt_sec
+						d_lat_m = forward_m * math.sin(angle) + lateral_m * math.cos(angle)
+						d_lon_m = forward_m * math.cos(angle) - lateral_m * math.sin(angle)
+
+					elif rover['profile'] == 'zigzag' :
+						# Naprzemienne ostre skręty co zadany "period" czasu
+						lateral_sign = 1 if (t_roam % rover['period']) < (rover['period'] / 2) else -1
+						lateral_m = lateral_sign * rover['speed'] * 0.8 * dt_sec
+						d_lat_m = forward_m * math.sin(angle) + lateral_m * math.cos(angle)
+						d_lon_m = forward_m * math.cos(angle) - lateral_m * math.sin(angle)
+
+					elif rover['profile'] == 'meander' :
+						# Płynna zmiana kierunku w czasie (losowy spacer, gładki)
+						rover['roam_angle'] += random.uniform(-0.15, 0.15)
+						angle = rover['roam_angle']
+						d_lat_m = forward_m * math.sin(angle)
+						d_lon_m = forward_m * math.cos(angle)
+
+					# Aplikowanie przesunięcia do globalnych koordynatów
+					rover['lat'] += d_lat_m * METERS_TO_LAT
+					rover['lon'] += d_lon_m * METERS_TO_LON
+
+				# --- GEOFENCING Z ODBICIEM (Bounce) ---
+				old_lat, old_lon = rover['lat'], rover['lon']
+				rover['lat'] = clamp(rover['lat'], FIELD_MIN_LAT, FIELD_MAX_LAT)
+				rover['lon'] = clamp(rover['lon'], FIELD_MIN_LON, FIELD_MAX_LON)
+
+				# Jeśli funkcja clamp() ucięła pozycję (robot uderzył w ścianę), zmieniamy jego kierunek
+				if rover['lat'] != old_lat or rover['lon'] != old_lon :
+					# Dodajemy ok. 180 stopni (pi) + losowe odchylenie, żeby robot zawrócił
+					rover['roam_angle'] += math.pi + random.uniform(-0.5, 0.5)
+
+				# --- SENSOR PROXIMITY ---
+				is_near, s_id = is_near_sensor(rover['lat'], rover['lon'], sensors, threshold_meters=15.0)
+				if is_near :
+					proximity_hits[s_id] += 1
+
+				writer.writerow([
+					rover['id'],
+					f"{current_time:.3f}",
+					f"{rover['lat']:.7f}",
+					f"{rover['lon']:.7f}"
+				])
+
+	print(f"\nZakończono. Plik '{filename}' wygenerowany.")
+	for s_id, hits in proximity_hits.items() :
+		time_near_sensor = hits / frequency_hz
+		print(f"Czujnik {s_id}: Zarejestrowano roboty w pobliżu przez {time_near_sensor:.1f} sekund.")
 
 
 if __name__ == "__main__" :
-	parser = argparse.ArgumentParser(description="Generator realistycznych danych GNSS dla robota na kampusie.")
-
-	parser.add_argument("-o", "--output", type=str, default="simulated_rovers_piotrowo.csv",
-	                    help="Nazwa pliku wyjściowego (np. moje_dane.csv)")
-	parser.add_argument("-d", "--duration", type=int, default=494,
-	                    help="Czas trwania symulacji w sekundach (domyślnie: 494)")
-	parser.add_argument("-f", "--frequency", type=int, default=10,
-	                    help="Częstotliwość próbkowania w Hz (domyślnie: 10)")
-	parser.add_argument("--lat", type=float, default=52.40152,
-	                    help="Początkowa szerokość geograficzna")
-	parser.add_argument("--lon", type=float, default=16.95164,
-	                    help="Początkowa długość geograficzna")
-	parser.add_argument("--alt", type=float, default=100.161,
-	                    help="Początkowa wysokość n.p.m.")
-	parser.add_argument("--start-time", type=int, default=1765375369784983905,
-	                    help="Czas początkowy w nanosekundach")
+	parser = argparse.ArgumentParser(
+		description="Zaawansowany generator floty rolniczej (Straight, Sine, ZigZag, Meander).")
+	parser.add_argument("-o", "--output", type=str, default="simulated_rovers_piotrowo.csv")
+	parser.add_argument("-n", "--num-rovers", type=int, default=5)
+	parser.add_argument("-d", "--duration", type=int, default=3600)
+	parser.add_argument("-f", "--frequency", type=int, default=10)
+	parser.add_argument("-s", "--sensors", type=int, default=3)
 
 	args = parser.parse_args()
 
-	# Przekazanie argumentów do funkcji
-	generate_bounded_gnss(
+	generate_fleet_data(
 		filename=args.output,
-		start_time_ns=args.start_time,
+		num_rovers=args.num_rovers,
 		duration_sec=args.duration,
 		frequency_hz=args.frequency,
-		lat0=args.lat,
-		lon0=args.lon,
-		alt0=args.alt
+		num_sensors=args.sensors
 	)
