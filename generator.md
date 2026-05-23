@@ -32,3 +32,23 @@ Wygenerowany plik CSV zawiera następujące kolumny:
 * **timestamp** - Czas w formacie UNIX Epoch (w sekundach z ułamkiem)
 * **latitude** - Szerokość geograficzna
 * **longitude** - Długość geograficzna
+
+## Wizualizacja tras (Generowanie mapy)
+
+Aby wygenerować obraz PNG przedstawiający trasy poruszania się robotów (plik `wizualizacja_tras_gnss.png`), użyj dołączonego skryptu do wizualizacji.
+
+### Wymagania
+Skrypt wizualizujący korzysta z bibliotek `pandas` oraz `matplotlib`. Przed jego uruchomieniem upewnij się, że masz je zainstalowane:
+
+```bash
+pip install pandas matplotlib
+```
+
+### Uruchomienie wizualizacji
+Upewnij się, że w twoim folderze znajduje się wygenerowany wcześniej plik CSV `simulated_rovers_piotrowo.csv`, a następnie wykonaj polecenie:
+
+```bash
+python visualize.py
+```
+
+W rezultacie w folderze ze pojawi się gotowy obraz `wizualizacja_tras_gnss.png` pokazujący granice pola oraz ścieżki poszczególnych łazików.
