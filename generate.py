@@ -38,7 +38,7 @@ def generate_realistic_gnss(
 			# --- 1. ROBOT: RUCH PO OKRĘGU (ublox_rover_circle) ---
 			# Ograniczamy promień do 10m, by nie wyjść poza ramy kampusu (MIN/MAX LAT/LON)
 			r_circle = 10.0
-			omega = 0.1  # Wolniejszy obrót (ok 60 sekund na pełne koło)
+			omega = 0.1
 			dx1 = r_circle * math.cos(omega * t_sec)
 			dy1 = r_circle * math.sin(omega * t_sec)
 			alt1 = alt0 + noise_alt
@@ -50,8 +50,6 @@ def generate_realistic_gnss(
 				round(alt1, 3), 2  # Status 2 oznacza STATUS_GBAS_FIX
 			])
 
-			# --- 2. ROBOT: RUCH W LINII PROSTEJ (ublox_rover_line) ---
-			# Jedzie bardzo wolno (0.2 m/s), aby przez 8 minut nie wyjechać z kampusu
 			v_line = 0.15
 			dx2 = v_line * t_sec - 35.0  # Startuje 35 metrów na zachód
 			dy2 = 0.0
@@ -64,7 +62,6 @@ def generate_realistic_gnss(
 				round(alt2, 3), 2
 			])
 
-			# --- 3. ROBOT: RUCH SINUSOIDALNY (ublox_rover_wave) ---
 			v_north = 0.1  # Powolna jazda na północ
 			amp = 5.0  # Mniejsze wężykowanie (5m w boki)
 			freq = 0.05
@@ -87,6 +84,5 @@ if __name__ == "__main__" :
 	parser.add_argument("-o", "--output", type=str, default="simulated_rovers_piotrowo.csv",
 	                    help="Nazwa pliku wyjściowego")
 
-	# Pozwalamy zmienić wartości, ale domyślne są wzięte bezpośrednio z pliku PDF
 	args = parser.parse_args()
 	generate_realistic_gnss(filename=args.output)
