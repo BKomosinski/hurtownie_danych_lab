@@ -129,7 +129,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Generator floty rolniczej.")
     parser.add_argument("-o", "--output", type=str, default="simulated_rovers_piotrowo.csv")
-    parser.add_argument("-n", "--num-rovers", type=int, default=5)
+    parser.add_argument("-n", "--num-rovers", type=int, default=100)
     parser.add_argument("-d", "--duration", type=int, default=3600)
     parser.add_argument("-f", "--frequency", type=int, default=10)
     parser.add_argument("-s", "--sensors", type=int, default=3)
