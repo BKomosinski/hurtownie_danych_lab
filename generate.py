@@ -43,130 +43,82 @@ def is_near_sensor(rover_lat, rover_lon, sensors, threshold_meters=15.0) :
 	return False, None
 
 
-def generate_fleet_data(
-      num_rovers=5,
-      start_time_unix=1714398000.523,
-      duration_sec=3600,
-      frequency_hz=10,
-      num_sensors=3
-) :
+import numpy as np
+
+
+def generate_fleet_data(num_rovers=5, duration_sec=3600, frequency_hz=10, num_sensors=3, start_time_unix=1714398000.523):
    steps = duration_sec * frequency_hz
-   dt_sec = 1.0 / frequency_hz
+   dt = 1.0 / frequency_hz
 
-   sensors = generate_sensors(num_sensors)
-   print("--- Zdefiniowane Czujniki ---")
-   for s in sensors :
-      print(f"[{s['id']}]: Lat: {s['lat']:.6f}, Lon: {s['lon']:.6f}")
+   # 1. Inicjalizacja stanu robotów jako tablice (zamiast słowników)
+   # Wszystkie parametry dla N robotów w jednym miejscu
+   lat = np.random.uniform(52.4600, 52.4650, num_rovers)
+   lon = np.random.uniform(16.9200, 16.9300, num_rovers)
+   speeds = np.random.uniform(1.0, 2.5, num_rovers)
+   angles = np.random.uniform(0, 2 * np.pi, num_rovers)
 
-   rovers = []
-   profiles = ['straight', 'sine', 'zigzag', 'meander']
+   # Profile przypisane jako tablica liczb (0:straight, 1:sine, 2:zigzag, 3:meander)
+   profiles = np.random.randint(0, 4, num_rovers)
 
-   for i in range(num_rovers) :
-      target_sensor = random.choice(sensors)
-      profile = random.choice(profiles)
+   # Parametry dla każdego robota
+   omega = np.random.uniform(0.5, 1.5, num_rovers)
+   amplitude = np.random.uniform(2.0, 6.0, num_rovers)
+   period = np.random.uniform(2.0, 5.0, num_rovers)
+   roam_start_t = np.zeros(num_rovers)
 
-      rovers.append({
-         'id' : i + 1,
-         'lat' : random.uniform(FIELD_MIN_LAT, FIELD_MAX_LAT),
-         'lon' : random.uniform(FIELD_MIN_LON, FIELD_MAX_LON),
-         'target_sensor' : target_sensor,
-         'state' : 'moving_to_sensor',
-         'time_at_sensor' : 0,
-         'speed' : random.uniform(1.0, 2.5),
-         'target_time_at_sensor' : (duration_sec / 2) + random.uniform(-300, 300),
-         'profile' : profile,
-         'roam_angle' : random.uniform(0, 2 * math.pi),
-         'omega' : random.uniform(0.5, 1.5),
-         'amplitude' : random.uniform(2.0, 6.0),
-         'period' : random.uniform(2.0, 5.0),
-         'roam_start_t' : 0
-      })
-
-   proximity_hits = {s['id'] : 0 for s in sensors}
    data_to_insert = []
 
-   print(f"\nGenerowanie danych dla {num_rovers} robotów (Profile: {', '.join(profiles)})...")
+   # Stałe przeliczniki
+   METERS_TO_LAT = 1 / 111320.0
+   METERS_TO_LON = 1 / (111320.0 * np.cos(np.radians(52.4625)))
 
-   for step in range(steps) :
-      current_time = start_time_unix + (step * dt_sec)
-      t_total = step * dt_sec
+   print("Generuję dane wektorowo...")
 
-      for rover in rovers :
-         ts = rover['target_sensor']
+   for step in range(steps):
+      current_time = start_time_unix + (step * dt)
+      t_total = step * dt
 
-         if rover['state'] == 'moving_to_sensor' :
-            dx_m = (ts['lon'] - rover['lon']) / METERS_TO_LON
-            dy_m = (ts['lat'] - rover['lat']) / METERS_TO_LAT
-            dist = math.sqrt(dx_m ** 2 + dy_m ** 2)
+      # Obliczanie przesunięć dla każdego profilu naraz (maskowanie)
+      d_lat_m = np.zeros(num_rovers)
+      d_lon_m = np.zeros(num_rovers)
 
-            if dist < 5.0 :
-               rover['state'] = 'working_at_sensor'
-            else :
-               move_dist = rover['speed'] * dt_sec
-               ratio = move_dist / dist if dist != 0 else 0
-               rover['lon'] += (dx_m * ratio) * METERS_TO_LON
-               rover['lat'] += (dy_m * ratio) * METERS_TO_LAT
+      # STRAIGHT
+      mask = (profiles == 0)
+      d_lat_m[mask] = (speeds[mask] * dt) * np.sin(angles[mask])
+      d_lon_m[mask] = (speeds[mask] * dt) * np.cos(angles[mask])
 
-         elif rover['state'] == 'working_at_sensor' :
-            angle = random.uniform(0, 2 * math.pi)
-            rover['lon'] += (math.cos(angle) * 0.5 * dt_sec) * METERS_TO_LON
-            rover['lat'] += (math.sin(angle) * 0.5 * dt_sec) * METERS_TO_LAT
+      # SINE
+      mask = (profiles == 1)
+      t_roam = t_total - roam_start_t[mask]
+      lateral = amplitude[mask] * omega[mask] * np.cos(omega[mask] * t_roam) * dt
+      d_lat_m[mask] = (speeds[mask] * dt) * np.sin(angles[mask]) + lateral * np.cos(angles[mask])
+      d_lon_m[mask] = (speeds[mask] * dt) * np.cos(angles[mask]) - lateral * np.sin(angles[mask])
 
-            rover['time_at_sensor'] += dt_sec
-            if rover['time_at_sensor'] >= rover['target_time_at_sensor'] :
-               rover['state'] = 'roaming'
-               rover['roam_start_t'] = t_total
+      # ZIGZAG
+      mask = (profiles == 2)
+      t_roam = t_total - roam_start_t[mask]
+      sign = np.where((t_roam % period[mask]) < (period[mask] / 2), 1, -1)
+      lateral = sign * speeds[mask] * 0.8 * dt
+      d_lat_m[mask] = (speeds[mask] * dt) * np.sin(angles[mask]) + lateral * np.cos(angles[mask])
+      d_lon_m[mask] = (speeds[mask] * dt) * np.cos(angles[mask]) - lateral * np.sin(angles[mask])
 
-         elif rover['state'] == 'roaming' :
-            t_roam = t_total - rover['roam_start_t']
-            d_lat_m = 0.0
-            d_lon_m = 0.0
-            forward_m = rover['speed'] * dt_sec
-            angle = rover['roam_angle']
+      # MEANDER
+      mask = (profiles == 3)
+      angles[mask] += np.random.uniform(-0.15, 0.15, np.sum(mask))
+      d_lat_m[mask] = (speeds[mask] * dt) * np.sin(angles[mask])
+      d_lon_m[mask] = (speeds[mask] * dt) * np.cos(angles[mask])
 
-            if rover['profile'] == 'straight' :
-               d_lat_m = forward_m * math.sin(angle)
-               d_lon_m = forward_m * math.cos(angle)
-            elif rover['profile'] == 'sine' :
-               lateral_m = rover['amplitude'] * rover['omega'] * math.cos(rover['omega'] * t_roam) * dt_sec
-               d_lat_m = forward_m * math.sin(angle) + lateral_m * math.cos(angle)
-               d_lon_m = forward_m * math.cos(angle) - lateral_m * math.sin(angle)
-            elif rover['profile'] == 'zigzag' :
-               lateral_sign = 1 if (t_roam % rover['period']) < (rover['period'] / 2) else -1
-               lateral_m = lateral_sign * rover['speed'] * 0.8 * dt_sec
-               d_lat_m = forward_m * math.sin(angle) + lateral_m * math.cos(angle)
-               d_lon_m = forward_m * math.cos(angle) - lateral_m * math.sin(angle)
-            elif rover['profile'] == 'meander' :
-               rover['roam_angle'] += random.uniform(-0.15, 0.15)
-               angle = rover['roam_angle']
-               d_lat_m = forward_m * math.sin(angle)
-               d_lon_m = forward_m * math.cos(angle)
+      # Aktualizacja pozycji
+      lat += d_lat_m * METERS_TO_LAT
+      lon += d_lon_m * METERS_TO_LON
 
-            rover['lat'] += d_lat_m * METERS_TO_LAT
-            rover['lon'] += d_lon_m * METERS_TO_LON
+      # Geofencing (wszystkie naraz)
+      lat = np.clip(lat, 52.4600, 52.4650)
+      lon = np.clip(lon, 16.9200, 16.9300)
 
-         old_lat, old_lon = rover['lat'], rover['lon']
-         rover['lat'] = clamp(rover['lat'], FIELD_MIN_LAT, FIELD_MAX_LAT)
-         rover['lon'] = clamp(rover['lon'], FIELD_MIN_LON, FIELD_MAX_LON)
-
-         if rover['lat'] != old_lat or rover['lon'] != old_lon :
-            rover['roam_angle'] += math.pi + random.uniform(-0.5, 0.5)
-
-         is_near, s_id = is_near_sensor(rover['lat'], rover['lon'], sensors, threshold_meters=15.0)
-         if is_near :
-            proximity_hits[s_id] += 1
-
-         data_to_insert.append((
-            rover['id'],
-            current_time,
-            rover['lat'],
-            rover['lon']
-         ))
-
-   print("\nZakończono generowanie danych.")
-   for s_id, hits in proximity_hits.items() :
-      time_near_sensor = hits / frequency_hz
-      print(f"Czujnik {s_id}: Zarejestrowano roboty w pobliżu przez {time_near_sensor:.1f} sekund.")
+      # Zbieranie danych (tu musimy dodać do listy)
+      for i in range(num_rovers):
+         data_to_insert.append((i + 1, current_time, lat[i], lon[i]))
 
    return data_to_insert
 
