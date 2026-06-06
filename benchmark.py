@@ -25,7 +25,6 @@ DROP_INDEXES = [
     "ALTER TABLE robot_positions DROP INDEX IF EXISTS idx_lon",
     "ALTER TABLE robot_positions DROP INDEX IF EXISTS idx_ts",
 ]
-# ──────────────────────────────────────────────────────────────────────────────
 
 
 def get_client():
@@ -153,11 +152,10 @@ def drop_indexes(client):
 
 def add_indexes(client):
     print("  [INDEX] Tworzę indeksy skipping...")
+    t0 = time.perf_counter()
     for name, ddl in INDEX_DDL.items():
-        t0 = time.perf_counter()
         client.command(ddl)
         print(f"    {name}: DDL OK")
-    t0 = time.perf_counter()
     client.command("ALTER TABLE robot_positions MATERIALIZE INDEX idx_lat")
     client.command("ALTER TABLE robot_positions MATERIALIZE INDEX idx_lon")
     client.command("ALTER TABLE robot_positions MATERIALIZE INDEX idx_ts")
@@ -186,14 +184,12 @@ def bench_index_impact(client, query_name: str, sql: str, params: dict, n: int =
         "stdev_s": statistics.stdev(no_idx_times) if len(no_idx_times) > 1 else 0.0,
     })
 
-    # --- BUDOWANIE INDEKSÓW ---
     build_time = add_indexes(client)
     results.append({
         "query":   query_name, "test": "index_build_time", "workers": 0,
         "min_s":   build_time, "max_s": build_time, "avg_s": build_time, "stdev_s": 0.0,
     })
 
-    # --- Z INDEKSAMI ---
     flush_query_cache(client)
     flush_mark_cache(client)
     print(f"  [{query_name}] Z indeksami ({n} iter)...")
@@ -254,7 +250,7 @@ def save_csv(results: list, path: str):
         w.writeheader()
         for r in results:
             w.writerow(r)
-    print(f"\n[CSV] Wyniki zapisane → {path}")
+    print(f"\n[CSV] Wyniki zapisane {path}")
 
 
 def print_summary(results: list):
